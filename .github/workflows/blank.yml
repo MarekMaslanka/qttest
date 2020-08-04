@@ -1,0 +1,204 @@
+name: Build matrix
+
+on: [push]
+
+env:
+  QT_VERSION: 5.14.2
+  QT_CREATOR_VERSION: 4.12.3
+  CLIENT_APPLICATION_NAME: qttest
+  CLIENT_APPLICATION_PRO: qttest.pro
+  APPLICATION_VERSION: 0.9.0
+
+jobs:
+  build:
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      matrix:
+        config:
+        - {
+            name: "macOS Latest x64", artifact: "macOS-x64.zip",
+            os: macos-latest
+          }
+
+    steps:
+    - name: Checkout supervisor
+      uses: actions/checkout@v2
+      with:
+        path: client
+
+    - name: Download Qt
+      id: qt
+      shell: cmake -P {0}
+      run: |
+        set(qt_version $ENV{QT_VERSION})
+        string(REPLACE "." "" qt_version_dotless "${qt_version}")
+
+        set(url_os "mac_x64")
+        set(qt_package_name "qt.qt5.${qt_version_dotless}.clang_64")
+        set(qt_dir_prefix "${qt_version}/clang_64")
+        set(qt_extras "qtmacextras")
+        set(qt_base_url "https://download.qt.io/online/qtsdkrepository/${url_os}/desktop/qt5_${qt_version_dotless}")
+        file(DOWNLOAD "${qt_base_url}/Updates.xml" ./Updates.xml)
+        file(READ ./Updates.xml updates_xml)
+        string(REGEX MATCH "<Name>${qt_package_name}.*<Version>([0-9+-.]+)</Version>.*<DownloadableArchives>qtbase([a-zA-Z0-9_-]+).7z"
+          updates_xml_output "${updates_xml}")
+        set(package_version ${CMAKE_MATCH_1})
+        set(package_suffix ${CMAKE_MATCH_2})
+        string(REPLACE "-debug-symbols" "" package_suffix "${package_suffix}")
+        file(MAKE_DIRECTORY qt5)
+        # Save the path for other steps
+        file(TO_CMAKE_PATH "$ENV{GITHUB_WORKSPACE}/qt5/${qt_dir_prefix}" qt_dir)
+        message("::set-output name=qt_dir::${qt_dir}")
+        foreach(package qtbase qtdeclarative qttools qtsvg ${qt_extras})
+          file(DOWNLOAD
+            "${qt_base_url}/${qt_package_name}/${package_version}${package}${package_suffix}.7z" ./${package}.7z
+          )
+          execute_process(COMMAND ${CMAKE_COMMAND} -E tar xvf ../${package}.7z WORKING_DIRECTORY qt5)
+        endforeach()
+        file(READ "qt5/${qt_dir_prefix}/mkspecs/qconfig.pri" qtconfig)
+        string(REPLACE "Enterprise" "OpenSource" qtconfig "${qtconfig}")
+        string(REPLACE "licheck.exe" "" qtconfig "${qtconfig}")
+        string(REPLACE "licheck64" "" qtconfig "${qtconfig}")
+        string(REPLACE "licheck_mac" "" qtconfig "${qtconfig}")
+        file(WRITE "qt5/${qt_dir_prefix}/mkspecs/qconfig.pri" "${qtconfig}")
+    - name: Download Qt Creator
+      id: qt_creator
+      shell: cmake -P {0}
+      run: |
+        string(REGEX MATCH "([0-9]+.[0-9]+).[0-9]+" outvar "$ENV{QT_CREATOR_VERSION}")
+        set(qtc_base_url "https://download.qt.io/official_releases/qtcreator/${CMAKE_MATCH_1}/$ENV{QT_CREATOR_VERSION}")
+
+        set(qtc_output_directory "qtcreator/bin/Qt Creator.app/Contents/PlugIns")
+        set(qtc_binary_server_name "$ENV{SERVER_APPLICATION_NAME}.app")
+        set(qtc_platform "mac_x64")
+
+        # Save the path for other steps
+        message("::set-output name=qtc_binary_tray_name::${qtc_binary_tray_name}")
+        message("::set-output name=qtc_binary_client_name::${qtc_binary_client_name}")
+        message("::set-output name=qtc_binary_server_name::${qtc_binary_server_name}")
+        message("::set-output name=qtc_output_directory::${qtc_output_directory}")
+        file(MAKE_DIRECTORY qtcreator)
+        foreach(package qtcreator qtcreator_dev)
+          file(DOWNLOAD
+            "${qtc_base_url}/installer_source/${qtc_platform}/${package}.7z" ./${package}.7z)
+          execute_process(COMMAND
+            ${CMAKE_COMMAND} -E tar xvf ../${package}.7z WORKING_DIRECTORY qtcreator)
+        endforeach()
+        execute_process(
+          COMMAND ${CMAKE_COMMAND} -E make_directory qtcreator/bin
+          COMMAND ${CMAKE_COMMAND} -E create_symlink
+            "$ENV{GITHUB_WORKSPACE}/qtcreator/Qt Creator.app"
+            "$ENV{GITHUB_WORKSPACE}/qtcreator/bin/Qt Creator.app"
+        )
+    - name: Configure
+      shell: cmake -P {0}
+      run: |
+        set(CMAKE_VERBOSE_MAKEFILE ON)
+
+        file(TO_CMAKE_PATH "$ENV{GITHUB_WORKSPACE}/qtcreator" qtcreator_dir)
+        foreach(app client)
+          execute_process(
+            COMMAND ${{ steps.qt.outputs.qt_dir }}/bin/qmake
+              $ENV{APPLICATION_PRO}
+              CONFIG+=release
+              QTC_SOURCE="${qtcreator_dir}"
+              QTC_BUILD="${qtcreator_dir}"
+            WORKING_DIRECTORY "${app}"
+            RESULT_VARIABLE result
+          )
+          if (NOT result EQUAL 0)
+            message(FATAL_ERROR "Bad exit status")
+          endif()
+        endforeach()
+    - name: Build
+      shell: cmake -P {0}
+      run: |
+        set(CMAKE_VERBOSE_MAKEFILE ON)
+
+        set(ENV{PATH} "${{ steps.qt.outputs.qt_dir }}/bin/:$ENV{PATH}")
+        set(ENV{LD_LIBRARY_PATH} "qtcreator/lib/Qt/lib:$ENV{LD_LIBRARY_PATH}")
+
+        include(ProcessorCount)
+        ProcessorCount(N)
+        set(make_program make -j ${N})
+        foreach(app client)
+          execute_process(
+            COMMAND ${make_program}
+           RESULT_VARIABLE result
+           WORKING_DIRECTORY "${app}"
+          )
+          if (NOT result EQUAL 0)
+            message(FATAL_ERROR "Bad exit status")
+          endif()
+          file(MAKE_DIRECTORY "${app}/deploy")
+        endforeach()
+        file(MAKE_DIRECTORY "client/deploy/$ENV{CLIENT_APPLICATION_NAME}")
+        file(TO_CMAKE_PATH "$ENV{GITHUB_WORKSPACE}/$ENV{CLIENT_APPLICATION_NAME}-$ENV{APPLICATION_VERSION}-${{ matrix.config.artifact }}" client_artifact)
+      
+        execute_process(
+          COMMAND ls -l
+        )
+        execute_process(
+          COMMAND "qt5/$ENV{QT_VERSION}/clang_64/bin/macdeployqt" "client/${{ steps.qt_creator.outputs.qtc_binary_client_name }}" -verbose=2
+          #WORKING_DIRECTORY "qt5/$ENV{QT_VERSION}/clang_64/bin/"
+        )
+        execute_process(
+          COMMAND ls -l
+          WORKING_DIRECTORY "client/${{ steps.qt_creator.outputs.qtc_binary_client_name }}"
+        )
+        execute_process(COMMAND
+          ${CMAKE_COMMAND} -E tar cvf ${client_artifact} --format=zip "client/${{ steps.qt_creator.outputs.qtc_binary_client_name }}"
+        )
+
+        execute_process(COMMAND
+          ls -l
+        )
+
+    - uses: actions/upload-artifact@v1
+      id: upload_client_artifact
+      with:
+        path: ./${{ env.CLIENT_APPLICATION_NAME }}-${{ env.APPLICATION_VERSION }}-${{ matrix.config.artifact }}
+        name: ${{ env.CLIENT_APPLICATION_NAME }}-${{ env.APPLICATION_VERSION }}-${{ matrix.config.artifact }}
+
+  deploy:
+    if: contains(github.ref, 'tags/v')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        config:
+        - {
+            name: "macOS Latest x64", artifact: "macOS-x64.zip",
+            os: macos-latest
+          }
+    needs: build
+
+    steps:
+
+    - name: Download client artifact
+      uses: actions/download-artifact@v1
+      with:
+        name: ${{ env.CLIENT_APPLICATION_NAME }}-${{ env.APPLICATION_VERSION }}-${{ matrix.config.artifact }}
+        path: ./
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1.0.0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        draft: false
+        prerelease: false
+
+    - name: Deploy client
+      id: client_upload_to_release
+      uses: actions/upload-release-asset@v1.0.1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./${{ env.CLIENT_APPLICATION_NAME }}-${{ env.APPLICATION_VERSION }}-${{ matrix.config.artifact }}
+        asset_name: ${{ env.CLIENT_APPLICATION_NAME }}-${{ env.APPLICATION_VERSION }}-${{ matrix.config.artifact }}
+        asset_content_type: application/zip
