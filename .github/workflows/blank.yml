@@ -70,13 +70,11 @@ jobs:
         set(qtc_base_url "https://download.qt.io/official_releases/qtcreator/${CMAKE_MATCH_1}/$ENV{QT_CREATOR_VERSION}")
 
         set(qtc_output_directory "qtcreator/bin/Qt Creator.app/Contents/PlugIns")
-        set(qtc_binary_server_name "$ENV{SERVER_APPLICATION_NAME}.app")
+        set(qtc_binary_client_name "$ENV{CLIENT_APPLICATION_NAME}.app")
         set(qtc_platform "mac_x64")
 
         # Save the path for other steps
-        message("::set-output name=qtc_binary_tray_name::${qtc_binary_tray_name}")
         message("::set-output name=qtc_binary_client_name::${qtc_binary_client_name}")
-        message("::set-output name=qtc_binary_server_name::${qtc_binary_server_name}")
         message("::set-output name=qtc_output_directory::${qtc_output_directory}")
         file(MAKE_DIRECTORY qtcreator)
         foreach(package qtcreator qtcreator_dev)
