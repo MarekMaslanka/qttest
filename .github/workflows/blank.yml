@@ -17,8 +17,8 @@ jobs:
       matrix:
         config:
         - {
-            name: "ubuntu"
-            os: macos-latest
+            name: "ubuntu",
+            os: ubuntu-latest
           }
 #         - {
 #             name: "macOS Latest x64", artifact: "macOS-x64.zip",
