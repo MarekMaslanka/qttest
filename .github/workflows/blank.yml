@@ -17,9 +17,13 @@ jobs:
       matrix:
         config:
         - {
-            name: "macOS Latest x64", artifact: "macOS-x64.zip",
+            name: "ubuntu"
             os: macos-latest
           }
+#         - {
+#             name: "macOS Latest x64", artifact: "macOS-x64.zip",
+#             os: ubuntu-latest
+#           }
 
     steps:
     - name: client test
